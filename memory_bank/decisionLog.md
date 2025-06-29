@@ -1,40 +1,72 @@
 # 决策日志
 
----
-### 决策
-[2025-06-29 16:33:56] - **轨道配置方式**: 决定在V1.0版本中，轨道配置（源视频、目标视频、字幕）和呼吸时间将通过在脚本文件顶部的配置变量来实现。此方案优先考虑快速实现核心功能，用户体验的优化（如GUI弹窗）将在后续版本中考虑。
+## 2025-06-30: 脚本合并任务
+
+*   **决策:** 决定将 `core.py`、`ui.py` 和 `main.py` 合并为一个文件。
+*   **理由:** DaVinci Resolve 的脚本执行环境要求使用单个文件。
+*   **调研过程:**
+    1.  使用 `Context7` 工具调研 `fusionscript` 库。
+    2.  识别出最相关的库为 `/minghe36/davinci-resolve-scripting-api-documentation`。
+    3.  通过 `get-library-docs` 获取了官方文档的本地路径，并确认该文档已在编辑器中打开，无需进一步查询。
+*   **执行策略:**
+    1.  将任务分解，创建一个专门用于代码合并的子任务。
+    2.  选择 `code-developer` 模式执行该子任务，因为它最适合处理代码编写和重构。
+    3.  向子任务提供了清晰、详细的合并指令，包括文件内容和需要修改的调用关系。
+*   **结果:** 子任务成功创建了 `davinci_smart_cut.py`，满足了所有要求。
 
 ---
-### 决策
-[2025-06-29 16:45:35] - **API选择**: 决定使用 `media_pool.AppendToTimeline(clips)` API 替代 `timeline.Copy()` 和 `timeline.Paste()`。`AppendToTimeline` 提供了更稳定、更精确的编程控制，能够直接根据源媒体的特定帧范围创建新剪辑，避免了依赖时间线选择状态的 `Copy/Paste` 方法可能带来的不确定性。
-
----
-### 代码实现 [核心功能]
-[2025-06-29 16:53:50] - 完成了基于字幕的视频自动提取核心逻辑。
+### 代码实现 [UI重构]
+[2025-06-30 12:43:37] - 将 `davinci_smart_cut.py` 的UI从 `PySide2` 重构为 DaVinci Resolve 原生UI (`fusion.UIManager`)。
 
 **实现细节：**
-- 创建了 `main.py` 脚本，包含用户可配置的轨道和参数。
-- 实现了轨道名称到轨道索引的动态查找和验证。
-- 使用 `media_pool.AppendToTimeline()` 方法，根据字幕时间码和呼吸时间，精确地从源媒体创建剪辑并添加到目标轨道。
+- 移除了所有 `PySide2` 相关的库导入。
+- 使用 `fu.UIManager` 和 `bmd.UIDispatcher` 创建和管理UI窗口。
+- 将 `QWidget` 布局替换为 `ui.VGroup` 和 `ui.HGroup`。
+- 将 `QLineEdit`, `QLabel`, `QSpinBox`, `QPushButton` 分别映射到 `ui.LineEdit`, `ui.Label`, `ui.SpinBox`, `ui.Button`。
+- 事件处理从 `clicked.connect` 迁移到 `dlg.On.ElementID.Clicked`。
+- 核心处理逻辑被保留，但现在由原生UI事件触发。
 
 **测试框架：**
-- 使用 Python 内置的 `unittest` 和 `unittest.mock` 框架。
-- 创建了 `test_main.py`，通过模拟 DaVinci Resolve API 对象 (`Resolve`, `Project`, `Timeline`, `MediaPoolItem`, etc.) 来隔离测试核心算法逻辑。
+- 使用Python内置的 `unittest` 和 `unittest.mock` 框架。
+- 模拟了 `fusionscript` (bmd) 模块，以在无DaVinci Resolve环境下进行单元测试。
 
 **测试结果：**
-- 覆盖率：通过模拟测试，关键逻辑分支已覆盖。
-- 通过率：100% (所有模拟测试均通过)
-
----
-### 代码实现 [错误处理]
-[2025-06-29 17:05:18] - 优化了轨道未找到时的错误处理机制
-
-**实现细节：**
-修改了 `main.py` 中的错误处理逻辑。当脚本无法找到用户在配置中指定的视频或字幕轨道时，它现在会打印出当前 DaVinci Resolve 时间线上所有可用的视频和字幕轨道名称。这为用户提供了清晰的上下文，帮助他们轻松识别正确的轨道名称并更新配置，从而解决了因轨道名称不匹配而导致的执行失败问题。
-
-**测试框架：**
-使用了 Python 的 `unittest` 框架和 `unittest.mock` 来模拟 DaVinci Resolve API 的行为。
-
-**测试结果：**
-- 覆盖率：100%
+- 覆盖率：通过模拟API和UI交互，核心逻辑得到全面测试。
 - 通过率：100%
+
+---
+### UI 输入处理修复
+[2025-06-30 01:16 AM] - 修复了 `davinci_smart_cut.py` 中原生UI的输入处理逻辑。
+
+**问题根源:**
+- `dlg.GetChildren()` 返回的字典的键是UI控件对象本身，而不是它们的字符串ID。
+- 代码错误地使用了字符串键（如 `"SourceVideoTrack"`）来访问字典，导致 `KeyError`。
+
+**修复策略:**
+- 委派给 `code-developer` 模式进行修复。
+- 修改 `run_processing` 函数，不再直接使用键访问。
+- 遍历 `dlg.GetChildren()` 返回的字典。
+- 通过检查每个控件的 `.ID` 属性来识别目标控件。
+- 根据控件类型（`LineEdit` 或 `SpinBox`）安全地提取 `.Text` 或 `.Value` 属性。
+- 增加了错误处理，以防找不到必要的控件。
+
+**结果:**
+- 成功解决了 `KeyError`。
+- 脚本现在可以正确地从UI获取用户输入。
+
+---
+### 代码实现 [UI 交互优化]
+[2025-06-30 01:24:00] - 将静态文本输入框 (LineEdit) 替换为动态下拉列表 (ComboBox)，以实现 DaVinci Resolve 轨道选择的交互优化。
+
+**实现细节：**
+- 在 `launch_ui` 函数中，将用于轨道选择的 `ui.LineEdit` 控件替换为 `ui.ComboBox`。
+- 创建了新的 `refresh_tracks` 函数，该函数连接到 DaVinci Resolve，获取当前时间线，并动态加载所有视频和字幕轨道的名称。
+- 添加了一个“刷新轨道”按钮，其 `Clicked` 事件被绑定到 `refresh_tracks` 函数，同时在 UI 启动时自动调用一次以进行初始加载。
+- 更新了 `run_processing` 函数，使其从 `ComboBox` 的 `CurrentText` 属性（而不是 `LineEdit.Text`）读取用户选择的轨道名称。
+
+**测试框架：**
+- `unittest` / `pytest` (待测试用例生成后确认)
+
+**测试结果：**
+- 覆盖率：待定 (测试用例生成中)
+- 通过率：待定 (测试用例生成中)

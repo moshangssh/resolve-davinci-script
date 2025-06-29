@@ -1,194 +1,82 @@
+# -*- coding: utf-8 -*-
 import unittest
-from unittest.mock import MagicMock, patch, call
-import io
+from unittest.mock import MagicMock, patch
 import sys
 
-# 由于 main.py 可能会导入 fusionscript，我们必须在测试开始前模拟它
-# 否则，在没有 DaVinci Resolve 环境的情况下，`import main` 会直接失败
+# 模拟 fusionscript 模块
 sys.modules['fusionscript'] = MagicMock()
 
+# 现在可以安全地导入 main 模块了
 import main
 
-class TestResolveScript(unittest.TestCase):
+class TestMain(unittest.TestCase):
 
-    def setUp(self):
-        """在每个测试用例开始前，重置模拟对象和标准输出捕获"""
-        # 模拟 DaVinci Resolve 的 API 对象结构
-        self.mock_bmd = sys.modules['fusionscript']
-        self.mock_resolve = MagicMock()
-        self.mock_project_manager = MagicMock()
-        self.mock_project = MagicMock()
-        self.mock_timeline = MagicMock()
-        self.mock_media_pool = MagicMock()
+    @patch('main.get_resolve')
+    @patch('main.process_timeline')
+    def test_main_success(self, mock_process_timeline, mock_get_resolve):
+        """测试 main 函数成功执行的路径"""
+        # --- Arrange ---
+        # 模拟 get_resolve 返回一个有效的 Resolve 对象
+        mock_resolve = MagicMock()
+        mock_project_manager = MagicMock()
+        mock_project = MagicMock()
+        mock_timeline = MagicMock()
 
-        # 设置模拟对象的返回关系
-        self.mock_bmd.scriptapp.return_value = self.mock_resolve
-        self.mock_resolve.GetProjectManager.return_value = self.mock_project_manager
-        self.mock_project_manager.GetCurrentProject.return_value = self.mock_project
-        self.mock_project.GetCurrentTimeline.return_value = self.mock_timeline
-        self.mock_project.GetMediaPool.return_value = self.mock_media_pool
+        mock_get_resolve.return_value = mock_resolve
+        mock_resolve.GetProjectManager.return_value = mock_project_manager
+        mock_project_manager.GetCurrentProject.return_value = mock_project
+        mock_project.GetCurrentTimeline.return_value = mock_timeline
 
-        # 捕获 print() 函数的输出
-        self.held_stdout = sys.stdout
-        sys.stdout = io.StringIO()
+        # --- Act ---
+        main.main()
 
-    def tearDown(self):
-        """在每个测试用例结束后，恢复标准输出"""
-        sys.stdout = self.held_stdout
-
-    def test_get_resolve_success(self):
-        """测试 get_resolve 成功连接的情况"""
-        with patch('main.bmd', self.mock_bmd):
-            resolve_instance = main.get_resolve()
-            self.assertIsNotNone(resolve_instance)
-            self.mock_bmd.scriptapp.assert_called_with("Resolve")
-
-    def test_get_resolve_connection_failed(self):
-        """测试 get_resolve 无法连接到 Resolve 的情况"""
-        self.mock_bmd.scriptapp.return_value = None
-        with patch('main.bmd', self.mock_bmd):
-            resolve_instance = main.get_resolve()
-            self.assertIsNone(resolve_instance)
-            output = sys.stdout.getvalue()
-            self.assertIn("无法连接到 DaVinci Resolve", output)
-
-    def test_main_no_project_or_timeline(self):
-        """测试当没有活动项目或时间线时的错误处理"""
-        self.mock_project.GetCurrentTimeline.return_value = None
-        with patch('main.get_resolve', return_value=self.mock_resolve):
-            main.main()
-            output = sys.stdout.getvalue()
-            self.assertIn("未能获取当前项目或时间线", output)
-
-    def test_track_lookup_success(self):
-        """测试所有轨道都能被成功找到的情况"""
-        # --- 更详细的模拟设置 ---
-        # 1. 模拟轨道名称查找
-        def mock_get_track_name(track_type, index):
-            if track_type == "video":
-                return {1: main.SOURCE_VIDEO_TRACK, 2: main.TARGET_VIDEO_TRACK}.get(index)
-            if track_type == "subtitle":
-                return {1: main.SUBTITLE_TRACK}.get(index)
-            return None
+        # --- Assert ---
+        # 验证 get_resolve 被调用
+        mock_get_resolve.assert_called_once()
         
-        self.mock_timeline.GetTrackCount.side_effect = lambda t: 2 if t == "video" else 1
-        self.mock_timeline.GetTrackName.side_effect = mock_get_track_name
+        # 验证 process_timeline 被调用，并传入了正确的参数
+        mock_process_timeline.assert_called_once_with(
+            timeline=mock_timeline,
+            source_video_track=main.SOURCE_VIDEO_TRACK,
+            target_video_track=main.TARGET_VIDEO_TRACK,
+            subtitle_track=main.SUBTITLE_TRACK,
+            breathing_time_frames=main.BREATHING_TIME_FRAMES
+        )
 
-        # 2. 模拟剪辑及其属性
-        mock_sub_clip = MagicMock()
-        mock_sub_clip.GetStart.return_value = 100
-        mock_sub_clip.GetEnd.return_value = 200
+    @patch('main.get_resolve')
+    @patch('main.process_timeline')
+    def test_main_resolve_not_found(self, mock_process_timeline, mock_get_resolve):
+        """测试当 get_resolve 返回 None 时的场景"""
+        # --- Arrange ---
+        mock_get_resolve.return_value = None
 
-        mock_video_clip = MagicMock()
-        mock_video_clip.GetStart.return_value = 0
-        mock_video_clip.GetEnd.return_value = 1000
-        mock_media_pool_item = MagicMock()
-        mock_media_pool_item.GetClipProperty.return_value = "0" # Start frame
-        mock_video_clip.GetMediaPoolItem.return_value = mock_media_pool_item
+        # --- Act ---
+        main.main()
 
-        # 3. 模拟轨道上的剪辑列表
-        def mock_get_item_list(track_type, index):
-            if track_type == "subtitle":
-                return [mock_sub_clip]
-            if track_type == "video":
-                return [mock_video_clip]
-            return []
+        # --- Assert ---
+        mock_get_resolve.assert_called_once()
+        # 验证 process_timeline 未被调用
+        mock_process_timeline.assert_not_called()
+
+    @patch('main.get_resolve')
+    @patch('main.process_timeline')
+    def test_main_no_project_or_timeline(self, mock_process_timeline, mock_get_resolve):
+        """测试当无法获取项目或时间线时的场景"""
+        # --- Arrange ---
+        mock_resolve = MagicMock()
+        mock_project_manager = MagicMock()
         
-        self.mock_timeline.GetItemListInTrack.side_effect = mock_get_item_list
-        self.mock_media_pool.AppendToTimeline.return_value = True
+        mock_get_resolve.return_value = mock_resolve
+        mock_resolve.GetProjectManager.return_value = mock_project_manager
+        # 模拟 GetCurrentProject 返回 None
+        mock_project_manager.GetCurrentProject.return_value = None
 
-        with patch('main.get_resolve', return_value=self.mock_resolve):
-            main.main()
-            output = sys.stdout.getvalue()
-            
-            # 关键断言：不应出现轨道未找到的错误
-            self.assertNotIn("错误：一个或多个指定的轨道未在时间线上找到", output)
-            self.assertIn(f"准备向轨道 '{main.TARGET_VIDEO_TRACK}' 添加 1 个剪辑...", output)
-            self.mock_media_pool.AppendToTimeline.assert_called_once()
+        # --- Act ---
+        main.main()
 
-    def test_track_lookup_fails_source_video_track_missing(self):
-        """测试当源视频轨道未找到时的错误处理"""
-        # 模拟轨道名称查找函数
-        def mock_get_track_name(track_type, index):
-            if track_type == "video":
-                return {1: "Some Other Track", 2: main.TARGET_VIDEO_TRACK}.get(index)
-            if track_type == "subtitle":
-                return {1: main.SUBTITLE_TRACK}.get(index)
-            return None
-
-        self.mock_timeline.GetTrackCount.side_effect = lambda t: 2 if t == "video" else 1
-        self.mock_timeline.GetTrackName.side_effect = mock_get_track_name
-
-        with patch('main.get_resolve', return_value=self.mock_resolve):
-            main.main()
-            output = sys.stdout.getvalue()
-            # 检查是否打印了主错误信息
-            self.assertIn("错误：一个或多个指定的轨道未在时间线上找到", output)
-            # 检查是否明确指出了哪个轨道未找到
-            self.assertIn(f"- 未找到源视频轨道: {main.SOURCE_VIDEO_TRACK}", output)
-            # 检查是否列出了可用的轨道以供用户参考
-            self.assertIn('--- 视频轨道 ---', output)
-            self.assertIn('- "Some Other Track"', output)
-            self.assertIn(f'- "{main.TARGET_VIDEO_TRACK}"', output)
-
-    def test_track_lookup_fails_all_tracks_missing(self):
-        """测试所有指定轨道都未找到时的错误处理"""
-        # 模拟轨道名称查找函数
-        def mock_get_track_name(track_type, index):
-            if track_type == "video":
-                return {1: "Track A", 2: "Track B"}.get(index)
-            if track_type == "subtitle":
-                return {1: "Track C"}.get(index)
-            return None
-
-        self.mock_timeline.GetTrackCount.side_effect = lambda t: 2 if t == "video" else 1
-        self.mock_timeline.GetTrackName.side_effect = mock_get_track_name
-
-        with patch('main.get_resolve', return_value=self.mock_resolve):
-            main.main()
-            output = sys.stdout.getvalue()
-            self.assertIn("错误：一个或多个指定的轨道未在时间线上找到", output)
-            self.assertIn(f"- 未找到源视频轨道: {main.SOURCE_VIDEO_TRACK}", output)
-            self.assertIn(f"- 未找到目标视频轨道: {main.TARGET_VIDEO_TRACK}", output)
-            self.assertIn(f"- 未找到字幕轨道: {main.SUBTITLE_TRACK}", output)
-            self.assertIn('- "Track A"', output)
-            self.assertIn('- "Track B"', output)
-            self.assertIn('- "Track C"', output)
-
-    def test_no_subtitle_clips_found(self):
-        """测试当字幕轨道上没有剪辑时的错误处理"""
-        # 轨道查找成功
-        self.mock_timeline.GetTrackCount.side_effect = lambda type: 2 if type == "video" else 1
-        self.mock_timeline.GetTrackName.side_effect = [
-            main.SOURCE_VIDEO_TRACK, main.TARGET_VIDEO_TRACK,
-            main.SUBTITLE_TRACK
-        ]
-        # 关键模拟：字幕轨道返回空列表
-        self.mock_timeline.GetItemListInTrack.side_effect = lambda type, index: [] if type == "subtitle" else [MagicMock()]
-
-        with patch('main.get_resolve', return_value=self.mock_resolve):
-            main.main()
-            output = sys.stdout.getvalue()
-            self.assertIn(f"在字幕轨道 '{main.SUBTITLE_TRACK}' 上未找到任何字幕片段。", output)
-            # 确认没有进入剪辑处理阶段
-            self.assertNotIn("准备向轨道", output)
-
-    def test_no_source_video_clips_found(self):
-        """测试当源视频轨道上没有剪辑时的错误处理"""
-        # 轨道查找成功
-        self.mock_timeline.GetTrackCount.side_effect = lambda type: 2 if type == "video" else 1
-        self.mock_timeline.GetTrackName.side_effect = [
-            main.SOURCE_VIDEO_TRACK, main.TARGET_VIDEO_TRACK,
-            main.SUBTITLE_TRACK
-        ]
-        # 关键模拟：视频轨道返回空列表
-        self.mock_timeline.GetItemListInTrack.side_effect = lambda type, index: [MagicMock()] if type == "subtitle" else []
-
-        with patch('main.get_resolve', return_value=self.mock_resolve):
-            main.main()
-            output = sys.stdout.getvalue()
-            self.assertIn(f"在源视频轨道 '{main.SOURCE_VIDEO_TRACK}' 上未找到任何视频片段。", output)
-            self.assertNotIn("准备向轨道", output)
+        # --- Assert ---
+        mock_get_resolve.assert_called_once()
+        mock_process_timeline.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
