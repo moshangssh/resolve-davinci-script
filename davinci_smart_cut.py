@@ -111,7 +111,7 @@ def process_timeline(timeline, source_video_track, target_video_track, subtitle_
 
 # --- UI Logic ---
 
-def run_processing(ui_inputs):
+def run_processing(ui_inputs, timeline):
     """执行核心处理逻辑"""
     # 初始化变量以存储从UI提取的值
     source_video_track = None
@@ -138,18 +138,6 @@ def run_processing(ui_inputs):
 
     print("UI 请求执行处理...")
     
-    resolve = get_resolve()
-    if not resolve:
-        print("无法连接到 Resolve。")
-        return
-
-    project_manager = resolve.GetProjectManager()
-    project = project_manager.GetCurrentProject()
-    if not project:
-        print("无法获取当前项目。")
-        return
-
-    timeline = project.GetCurrentTimeline()
     if not timeline:
         print("无法获取当前时间线。")
         return
@@ -173,25 +161,34 @@ def launch_ui():
         print("无法获取 Fusion/UI Manager。请在 DaVinci Resolve 的 'Fusion' 页面运行此脚本。")
         return
 
-    # --- 创建 UI 元素 ---
+    # --- 创建 UI 元素并将其存储在字典中 ---
+    controls = {
+        'SourceVideoTrack': ui.ComboBox({'ID': 'SourceVideoTrack'}),
+        'TargetVideoTrack': ui.ComboBox({'ID': 'TargetVideoTrack'}),
+        'SubtitleTrack': ui.ComboBox({'ID': 'SubtitleTrack'}),
+        'BreathingTime': ui.SpinBox({'ID': 'BreathingTime', 'Min': 0, 'Max': 999, 'Value': 15}),
+        'RefreshButton': ui.Button({'ID': 'RefreshButton', 'Text': '刷新轨道'}),
+        'ExecuteButton': ui.Button({'ID': 'ExecuteButton', 'Text': '执行'})
+    }
+
     win_components = [
         ui.Label({'ID': 'Label1', 'Text': "源视频轨道:"}),
-        ui.ComboBox({'ID': 'SourceVideoTrack', 'Weight': 0}),
+        controls['SourceVideoTrack'],
         
         ui.Label({'ID': 'Label2', 'Text': "目标视频轨道:"}),
-        ui.ComboBox({'ID': 'TargetVideoTrack', 'Weight': 0}),
+        controls['TargetVideoTrack'],
         
         ui.Label({'ID': 'Label3', 'Text': "字幕轨道:"}),
-        ui.ComboBox({'ID': 'SubtitleTrack', 'Weight': 0}),
+        controls['SubtitleTrack'],
         
         ui.HGroup({'Weight': 0}, [
             ui.Label({'ID': 'Label4', 'Text': "呼吸时间 (帧):"}),
-            ui.SpinBox({'ID': 'BreathingTime', 'Min': 0, 'Max': 999, 'Value': 15}),
+            controls['BreathingTime'],
         ]),
         
         ui.HGroup({'Weight': 0}, [
-            ui.Button({'ID': 'RefreshButton', 'Text': '刷新轨道'}),
-            ui.Button({'ID': 'ExecuteButton', 'Text': '执行'}),
+            controls['RefreshButton'],
+            controls['ExecuteButton'],
         ]),
     ]
 
@@ -205,7 +202,7 @@ def launch_ui():
     }, win)
 
     # --- 事件处理和轨道加载 ---
-    controls = dlg.GetChildren()
+    # 我们现在直接使用自己创建的 controls 字典，不再需要 GetChildren()
 
     def refresh_tracks():
         """获取并刷新时间线上的轨道列表"""
@@ -248,7 +245,20 @@ def launch_ui():
         disp.ExitLoop()
 
     def _execute(ev):
-        run_processing(controls)
+        resolve = get_resolve()
+        if not resolve:
+            print("无法在执行前连接到 Resolve。")
+            return
+        project = resolve.GetProjectManager().GetCurrentProject()
+        if not project:
+            print("无法在执行前获取当前项目。")
+            return
+        timeline = project.GetCurrentTimeline()
+        if not timeline:
+            print("无法在执行前获取当前时间线。")
+            return
+        # 直接传递我们自己构建的、可靠的 controls 字典
+        run_processing(controls, timeline)
 
     def _refresh(ev):
         refresh_tracks()
